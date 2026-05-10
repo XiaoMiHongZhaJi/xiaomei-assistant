@@ -1,0 +1,41 @@
+# Gradle / Android build output
+.gradle/
+build/
+**/build/
+**/.cxx/
+
+# Local machine configuration
+local.properties
+*.keystore
+*.jks
+*.p12
+*.pem
+
+# Generated APKs and compiled artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+classes.dex
+
+# Debug, device, and reverse-engineering scratch files
+tmp/
+tmp_*
+.codex-ui-evidence/
+hs_err_*.log
+*.log
+*.db
+*.sqlite
+*.trace
+*.hprof
+Screenshot_*.png
+*.xml.bak
+*.bundle
+
+# IDE files
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db

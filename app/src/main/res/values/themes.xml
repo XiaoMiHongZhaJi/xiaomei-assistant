@@ -1,0 +1,39 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <style name="Theme.XiaoMei" parent="Theme.Material3.DayNight.NoActionBar">
+    <item name="android:statusBarColor">@color/xiaomei_bg</item>
+    <item name="android:navigationBarColor">@color/xiaomei_bg</item>
+    <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+    <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+  </style>
+
+  <style name="Theme.XiaoMei.ModuleUi" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <item name="themeColor">@color/xiaomei_primary</item>
+    <item name="usableColor">#FF4CAF50</item>
+    <item name="unusableColor">#FFFF5252</item>
+    <item name="warnColor">#FFFFC107</item>
+    <item name="lineColor">#FFDDDDDD</item>
+    <item name="backgroundColor">#FFFFFFFF</item>
+    <item name="backgroundColorAlphaTitle">#CCFFFFFF</item>
+    <item name="android:statusBarColor">?attr/backgroundColor</item>
+    <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    <item name="android:windowLightStatusBar">true</item>
+    <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+    <item name="colorPrimary">?attr/themeColor</item>
+    <item name="colorPrimaryVariant">?attr/themeColor</item>
+    <item name="colorSecondary">?attr/themeColor</item>
+    <item name="colorOnPrimary">@color/firstTextColor</item>
+    <item name="colorOnSecondary">@color/firstTextColor</item>
+    <item name="colorControlNormal">@color/firstTextColor</item>
+  </style>
+
+  <style name="Toolbar.DayNight" parent="Widget.MaterialComponents.Toolbar">
+    <item name="android:layout_width">match_parent</item>
+    <item name="android:layout_height">wrap_content</item>
+    <item name="android:background">?attr/backgroundColor</item>
+    <item name="titleTextColor">@color/firstTextColor</item>
+    <item name="subtitleTextColor">@color/secondTextColor</item>
+    <item name="navigationIconTint">@color/firstTextColor</item>
+  </style>
+</resources>
+
