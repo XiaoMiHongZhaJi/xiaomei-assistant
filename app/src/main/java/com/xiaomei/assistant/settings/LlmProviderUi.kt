@@ -23,7 +23,8 @@ internal object LlmProviderUi {
 
   private val providerOptions = listOf(
     Option("OpenAI", LlmProvider.OPENAI),
-    Option("Xiaomi MiMo", LlmProvider.XIAOMI_MIMO)
+    Option("Xiaomi MiMo", LlmProvider.XIAOMI_MIMO),
+    Option("Google Gemini", LlmProvider.GEMINI)
   )
 
   private val openAiModes = listOf(
@@ -33,6 +34,10 @@ internal object LlmProviderUi {
 
   private val mimoModes = listOf(
     Option("MiMo Chat Completions", LlmApiMode.MIMO_CHAT_COMPLETIONS)
+  )
+
+  private val geminiModes = listOf(
+    Option("Gemini Generate Content", LlmApiMode.GEMINI_GENERATE_CONTENT)
   )
 
   fun setup(root: View) {
@@ -112,7 +117,11 @@ internal object LlmProviderUi {
   }
 
   private fun modeOptions(provider: String): List<Option> {
-    return if (LlmProvider.normalize(provider) == LlmProvider.XIAOMI_MIMO) mimoModes else openAiModes
+    return when (LlmProvider.normalize(provider)) {
+      LlmProvider.XIAOMI_MIMO -> mimoModes
+      LlmProvider.GEMINI -> geminiModes
+      else -> openAiModes
+    }
   }
 
   private fun optionsAdapter(root: View, options: List<Option>): ArrayAdapter<String> {

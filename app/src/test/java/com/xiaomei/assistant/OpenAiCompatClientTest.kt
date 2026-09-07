@@ -71,6 +71,22 @@ class OpenAiCompatClientTest {
   }
 
   @Test
+  fun `gemini chat request uses max completion tokens field`() {
+    val request = client.buildRequest(
+      config = LlmConfig(
+        provider = LlmProvider.GEMINI,
+        apiMode = LlmApiMode.GEMINI_GENERATE_CONTENT,
+        maxTokens = 256
+      ),
+      messages = emptyList(),
+      userMessage = "你好"
+    )
+
+    assertThat(request.maxTokens).isNull()
+    assertThat(request.maxCompletionTokens).isEqualTo(256)
+  }
+
+  @Test
   fun `mimo chat request uses max completion tokens field`() {
     val request = client.buildRequest(
       config = LlmConfig(

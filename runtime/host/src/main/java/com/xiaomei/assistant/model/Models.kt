@@ -72,10 +72,12 @@ object AivsAsrBlacklistMatcher {
 object LlmProvider {
   const val OPENAI = "openai"
   const val XIAOMI_MIMO = "xiaomi_mimo"
+  const val GEMINI = "gemini"
 
   fun normalize(value: String): String {
     return when (value.trim().lowercase()) {
       XIAOMI_MIMO -> XIAOMI_MIMO
+      GEMINI -> GEMINI
       else -> OPENAI
     }
   }
@@ -85,10 +87,12 @@ object LlmApiMode {
   const val OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
   const val OPENAI_RESPONSES = "openai_responses"
   const val MIMO_CHAT_COMPLETIONS = "mimo_chat_completions"
+  const val GEMINI_GENERATE_CONTENT = "gemini_generate_content"
 
   fun normalize(provider: String, value: String): String {
     return when (LlmProvider.normalize(provider)) {
       LlmProvider.XIAOMI_MIMO -> MIMO_CHAT_COMPLETIONS
+      LlmProvider.GEMINI -> GEMINI_GENERATE_CONTENT
       else -> when (value.trim().lowercase()) {
         OPENAI_RESPONSES -> OPENAI_RESPONSES
         else -> OPENAI_CHAT_COMPLETIONS

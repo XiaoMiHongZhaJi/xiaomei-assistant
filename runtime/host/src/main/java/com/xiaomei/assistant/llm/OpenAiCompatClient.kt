@@ -123,12 +123,28 @@ class OpenAiCompatClient(
     memories: List<MemoryRecord> = emptyList(),
     userMessage: String
   ): LlmCompletionResult = withContext(Dispatchers.IO) {
-    val answer = if (usesOpenAiResponses(config)) {
-      executeResponsesRequest(config, buildResponsesRequest(config, messages, memories, userMessage))
-    } else {
-      val requestBody = buildRequest(config, messages, memories, userMessage)
-      val payload = executeChatRequest(config, requestBody)
-      payload.choices.firstOrNull()?.message?.content?.trim().orEmpty()
+    val answer = when {
+      usesGemini(config) -> {
+        executeGeminiRequest(
+          config = config,
+          messages = messages,
+          memories = memories,
+          userMessage = userMessage
+        )
+      }
+
+      usesOpenAiResponses(config) -> {
+        executeResponsesRequest(
+          config,
+          buildResponsesRequest(config, messages, memories, userMessage)
+        )
+      }
+
+      else -> {
+        val requestBody = buildRequest(config, messages, memories, userMessage)
+        val payload = executeChatRequest(config, requestBody)
+        payload.choices.firstOrNull()?.message?.content?.trim().orEmpty()
+      }
     }
     if (answer.isBlank()) {
       throw IOException("LLM returned an empty answer")
@@ -182,7 +198,7 @@ class OpenAiCompatClient(
         .sortedBy { it.createdAt }
         .forEach { item ->
           add(ChatMessage(role = item.role, content = item.content))
-      }
+        }
       add(ChatMessage(role = "user", content = userMessage))
     }
     return OpenAiChatRequest(
@@ -268,7 +284,7 @@ class OpenAiCompatClient(
           responsesContentItem(
             "user",
             memoryExtractionUserPrompt(question, answer, existingMemories) +
-              "\n输出格式：{\"actions\":[{\"action\":\"create\",\"content\":\"...\"}]}"
+                    "\n输出格式：{\"actions\":[{\"action\":\"create\",\"content\":\"...\"}]}"
           )
         )
       },
@@ -294,6 +310,177 @@ class OpenAiCompatClient(
       maxTokens = if (usesMimoChat(config)) null else 512,
       maxCompletionTokens = if (usesMimoChat(config)) 512 else null
     )
+  }
+
+  private fun buildGeminiRequest(
+    config: LlmConfig,
+    messages: List<ConversationMessageRecord>,
+    memories: List<MemoryRecord>,
+    userMessage: String
+  ): JsonObject {
+    val contents = buildJsonArray {
+      messages
+        .filter {
+          it.content.isNotBlank() &&
+                  (
+                          it.role == ConversationMessageRole.USER ||
+                                  it.role == ConversationMessageRole.ASSISTANT
+                          )
+        }
+        .sortedBy { it.createdAt }
+        .forEach { item ->
+          add(
+            buildJsonObject {
+              put(
+                "role",
+                if (item.role == ConversationMessageRole.USER) {
+                  "user"
+                } else {
+                  "model"
+                }
+              )
+
+              putJsonArray("parts") {
+                add(
+                  buildJsonObject {
+                    put("text", item.content)
+                  }
+                )
+              }
+            }
+          )
+        }
+
+      add(
+        buildJsonObject {
+          put("role", "user")
+
+          putJsonArray("parts") {
+            add(
+              buildJsonObject {
+                put("text", userMessage)
+              }
+            )
+          }
+        }
+      )
+    }
+
+    return buildJsonObject {
+      val systemPrompt = buildSystemPrompt(config, memories)
+
+      if (systemPrompt.isNotBlank()) {
+        put(
+          "systemInstruction",
+          buildJsonObject {
+            putJsonArray("parts") {
+              add(
+                buildJsonObject {
+                  put("text", systemPrompt)
+                }
+              )
+            }
+          }
+        )
+      }
+
+      put("contents", contents)
+
+      if (isModelAllowTemperature(config.model)) {
+        put(
+          "generationConfig",
+          buildJsonObject {
+            put("temperature", config.temperature)
+            put("maxOutputTokens", config.maxTokens)
+          }
+        )
+      } else {
+        put(
+          "generationConfig",
+          buildJsonObject {
+            put("maxOutputTokens", config.maxTokens)
+          }
+        )
+      }
+    }
+  }
+
+  private fun executeGeminiRequest(
+    config: LlmConfig,
+    messages: List<ConversationMessageRecord>,
+    memories: List<MemoryRecord>,
+    userMessage: String
+  ): String {
+    val requestBody = buildGeminiRequest(
+      config = config,
+      messages = messages,
+      memories = memories,
+      userMessage = userMessage
+    )
+
+    val url = geminiUrl(config.baseUrl, config.model)
+
+    logRequestShape(
+      config,
+      url,
+      requestBody.keys.sorted()
+    )
+
+    val requestBuilder = Request.Builder()
+      .url(url)
+      .header("Content-Type", "application/json")
+      .header("X-goog-api-key", config.apiKey)
+      .post(
+        json.encodeToString(requestBody)
+          .toRequestBody("application/json".toMediaType())
+      )
+
+    val response = client.newCall(requestBuilder.build()).execute()
+
+    if (!response.isSuccessful) {
+      throw IOException(
+        "HTTP ${response.code}: ${response.body?.string().orEmpty()}"
+      )
+    }
+
+    val body = response.body?.string().orEmpty()
+
+    return parseGeminiText(
+      json.parseToJsonElement(body).jsonObject
+    )
+  }
+
+  private fun parseGeminiText(response: JsonObject): String {
+    val candidates = response["candidates"]?.jsonArray
+      ?: return ""
+
+    val text = StringBuilder()
+
+    candidates.forEach { candidate ->
+      val content = candidate.jsonObject["content"]?.jsonObject
+        ?: return@forEach
+
+      val parts = content["parts"]?.jsonArray
+        ?: return@forEach
+
+      parts.forEach { part ->
+        val partObject = part.jsonObject
+
+        val partText = partObject["text"]
+          ?.jsonPrimitive
+          ?.contentOrNull
+          .orEmpty()
+
+        if (partText.isNotBlank()) {
+          if (text.isNotEmpty()) {
+            text.append('\n')
+          }
+          text.append(partText)
+        }
+      }
+    }
+
+    return text.toString().trim()
   }
 
   private fun executeChatRequest(config: LlmConfig, requestBody: OpenAiChatRequest): OpenAiChatResponse {
@@ -497,8 +684,8 @@ class OpenAiCompatClient(
     if (enabled.isEmpty()) return config.systemPrompt
     val memoryText = enabled.joinToString("\n") { record -> "- ${record.content.trim()}" }
     return config.systemPrompt.trimEnd() +
-      "\n\n<memories>\n" + memoryText +
-      "\n</memories>\n请把 <memories> 作为长期用户偏好与事实背景使用；除非用户询问，不要直接说明你读取了记忆。"
+            "\n\n<memories>\n" + memoryText +
+            "\n</memories>\n请把 <memories> 作为长期用户偏好与事实背景使用；除非用户询问，不要直接说明你读取了记忆。"
   }
 
   private fun buildResponsesRequestBody(
@@ -539,14 +726,23 @@ class OpenAiCompatClient(
   private fun logRequestShape(config: LlmConfig, url: String, bodyKeys: Collection<String>) {
     StartupInfo.log(
       "LLM request provider=${LlmProvider.normalize(config.provider)} " +
-        "apiMode=${LlmApiMode.normalize(config.provider, config.apiMode)} " +
-        "url=$url model=${config.model} bodyKeys=${bodyKeys.joinToString(",")}"
+              "apiMode=${LlmApiMode.normalize(config.provider, config.apiMode)} " +
+              "url=$url model=${config.model} bodyKeys=${bodyKeys.joinToString(",")}"
     )
   }
 
   fun chatCompletionsUrl(baseUrl: String): String {
     val trimmed = baseUrl.trim().trimEnd('/')
     return if (trimmed.endsWith("/v1")) "$trimmed/chat/completions" else "$trimmed/v1/chat/completions"
+  }
+
+  fun geminiUrl(
+    baseUrl: String,
+    model: String
+  ): String {
+    val trimmed = baseUrl.trim().trimEnd('/')
+
+    return "$trimmed/v1beta/models/$model:generateContent"
   }
 
   fun responsesUrl(baseUrl: String): String {
@@ -556,12 +752,20 @@ class OpenAiCompatClient(
 
   private fun usesOpenAiChat(config: LlmConfig): Boolean {
     return LlmProvider.normalize(config.provider) == LlmProvider.OPENAI &&
-      LlmApiMode.normalize(config.provider, config.apiMode) == LlmApiMode.OPENAI_CHAT_COMPLETIONS
+            LlmApiMode.normalize(config.provider, config.apiMode) == LlmApiMode.OPENAI_CHAT_COMPLETIONS
+  }
+
+  private fun usesGemini(config: LlmConfig): Boolean {
+    return LlmProvider.normalize(config.provider) == LlmProvider.GEMINI &&
+            LlmApiMode.normalize(
+              config.provider,
+              config.apiMode
+            ) == LlmApiMode.GEMINI_GENERATE_CONTENT
   }
 
   private fun usesOpenAiResponses(config: LlmConfig): Boolean {
     return LlmProvider.normalize(config.provider) == LlmProvider.OPENAI &&
-      LlmApiMode.normalize(config.provider, config.apiMode) == LlmApiMode.OPENAI_RESPONSES
+            LlmApiMode.normalize(config.provider, config.apiMode) == LlmApiMode.OPENAI_RESPONSES
   }
 
   private fun usesMimoChat(config: LlmConfig): Boolean {

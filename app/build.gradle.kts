@@ -11,8 +11,8 @@ android {
     applicationId = "com.xiaomei.assistant"
     minSdk = 28
     targetSdk = 34
-    versionCode = 3
-    versionName = "0.2.0"
+    versionCode = 3021
+    versionName = "0.2.1"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     multiDexKeepProguard = file("multidex-keep.pro")
     vectorDrawables {
