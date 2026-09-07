@@ -29,6 +29,7 @@ object HostSettingsNavigation {
   const val targetSettingsMain = "settings_main"
   const val targetLlmConfig = "llm_config"
   const val targetAivsRules = "aivs_rules"
+  const val targetCustomCommand = "custom_command"
   const val targetRuntimeStatus = "runtime_status"
   const val targetAivsStatus = "aivs_status"
   const val targetSessionHistory = "session_history"

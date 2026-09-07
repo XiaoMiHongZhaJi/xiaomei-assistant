@@ -3,6 +3,8 @@
 import com.xiaomei.assistant.runtime.RuntimeContainer
 import com.xiaomei.assistant.model.AivsAsrBlacklistMatcher
 import com.xiaomei.assistant.model.AivsAsrBlacklistRule
+import com.xiaomei.assistant.model.CustomCommandExecutor
+import com.xiaomei.assistant.model.CustomCommandMatcher
 import com.xiaomei.assistant.status.AivsDebugSnapshotStore
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -1248,6 +1250,26 @@ class AivsRuntimeHook : HostHook {
         reason = "runtime_unavailable"
       )
       HookLog.w("Skip LLM because runtime container is unavailable did=$did sessionId=${state.sessionId}")
+      return
+    }
+
+    val customCommandMatch = CustomCommandMatcher.match(question, container.configRepository.config.value)
+    if (customCommandMatch != null) {
+      val rule = customCommandMatch.rule
+
+      HookLog.w(
+        "AIVS custom command matched " +
+                "did=$did " +
+                "sessionId=${state.sessionId} " +
+                "rule=${rule.id} " +
+                "name=${rule.name} " +
+                "pattern=${rule.pattern.take(80)}"
+      )
+
+      CustomCommandExecutor.executeAsync(
+        customCommandMatch
+      )
+
       return
     }
 

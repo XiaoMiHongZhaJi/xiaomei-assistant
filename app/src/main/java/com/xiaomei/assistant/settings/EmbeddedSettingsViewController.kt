@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -19,6 +20,8 @@ import com.xiaomei.assistant.R
 import com.xiaomei.assistant.host.HostSettingsNavigation
 import com.xiaomei.assistant.model.AivsAsrBlacklistMatcher
 import com.xiaomei.assistant.model.AivsAsrBlacklistRule
+import com.xiaomei.assistant.model.CustomCommandMatcher
+import com.xiaomei.assistant.model.CustomCommandRule
 import com.xiaomei.assistant.model.ConversationMessageRecord
 import com.xiaomei.assistant.model.ConversationMessageRole
 import com.xiaomei.assistant.model.ConversationRecord
@@ -79,6 +82,7 @@ internal class EmbeddedSettingsViewController(
     when (extras?.getString(HostSettingsNavigation.extraEntryTarget)) {
       HostSettingsNavigation.targetLlmConfig -> showLlmConfigPage(entrySource, replace = true)
       HostSettingsNavigation.targetAivsRules -> showAivsRulesPage(replace = true)
+      HostSettingsNavigation.targetCustomCommand -> showCustomCommandPage(replace = true)
       HostSettingsNavigation.targetRuntimeStatus -> showStatusPage(HostSettingsNavigation.targetRuntimeStatus, replace = true)
       HostSettingsNavigation.targetAivsStatus -> showStatusPage(HostSettingsNavigation.targetAivsStatus, replace = true)
       HostSettingsNavigation.targetSessionHistory -> showHistoryPage(replace = true)
@@ -109,6 +113,9 @@ internal class EmbeddedSettingsViewController(
         HeaderItem("核心配置"),
         TextListItem("LLM 配置", "配置模型、密钥、端点与提示词") {
           showLlmConfigPage(entrySource)
+        },
+        TextListItem("自定义指令", "配置自定义指令，命中后执行", divider = false) {
+          showCustomCommandPage()
         },
         TextListItem("接管规则", "配置 ASR 黑名单，命中后放行官方 reply", divider = false) {
           showAivsRulesPage()
@@ -363,6 +370,396 @@ internal class EmbeddedSettingsViewController(
       }
       items.add(SpacerItem(24))
       adapter.submitList(items)
+    }
+  }
+
+  private fun showCustomCommandPage(replace: Boolean = false) {
+    val adapter = SettingsListAdapter()
+    val view = createPaddedList(adapter)
+    adapter.submitList(listOf(SpacerItem(8), DescriptionItem("正在读取自定义指令..."), SpacerItem(24)))
+    pushPage(Page("自定义指令", view), replace)
+    renderCustomCommandPage(adapter)
+  }
+
+  private fun renderCustomCommandPage(adapter: SettingsListAdapter) {
+    scope.launch {
+      val config = withContext(Dispatchers.IO) {
+        runCatching { runtime.configRepository.snapshot() }.getOrDefault(LlmConfig())
+      }
+      latestLlmConfig = config
+      val items = ArrayList<SettingsListItem>()
+      items.add(SpacerItem(8))
+
+      // =========================
+      // 自定义指令
+      // =========================
+
+      items.add(SpacerItem(16))
+
+      items.add(
+        HeaderItem("自定义指令")
+      )
+
+      items.add(
+        TextListItem(
+          title = "启用自定义指令",
+          summary = "命中 final ASR 后执行对应指令，不请求 LLM",
+          hasSwitch = true,
+          checked = config.customCommandEnabled
+        ) {
+          saveAivsRulesConfig(
+            config.copy(
+              customCommandEnabled =
+                !config.customCommandEnabled
+            )
+          ) {
+            renderCustomCommandPage(adapter)
+          }
+        }
+      )
+
+      items.add(
+        TextListItem(
+          title = "新增指令",
+          summary = "支持关键词包含、关键词等于、正则包含、正则全匹配",
+          divider = false
+        ) {
+          showCustomCommandEditor(null) {
+            renderCustomCommandPage(adapter)
+          }
+        }
+      )
+
+      items.add(
+        HeaderItem("指令")
+      )
+
+      if (config.customCommandRules.isEmpty()) {
+
+        items.add(
+          DescriptionItem("暂无自定义指令")
+        )
+
+      } else {
+
+        config.customCommandRules.forEachIndexed { index, rule ->
+
+          items.add(
+            TextListItem(
+              title = rule.name.ifBlank {
+                rule.pattern
+              },
+              summary = customCommandRuleSummary(rule),
+              value = if (rule.enabled) {
+                "启用"
+              } else {
+                "停用"
+              },
+              hasSwitch = true,
+              checked = rule.enabled,
+              divider =
+                index != config.customCommandRules.lastIndex
+            ) {
+              showCustomCommandActions(rule) {
+                renderCustomCommandPage(adapter)
+              }
+            }
+          )
+        }
+      }
+
+      items.add(
+        SpacerItem(24)
+      )
+
+      adapter.submitList(items)
+    }
+  }
+
+  private fun showCustomCommandActions(
+    rule: CustomCommandRule,
+    onChanged: () -> Unit
+  ) {
+    val nextEnabled = if (rule.enabled) "停用" else "启用"
+
+    AlertDialog.Builder(context)
+      .setTitle("自定义指令")
+      .setMessage(
+        "${rule.name}\n" +
+                "${customCommandRuleSummary(rule)}\n" +
+                "匹配规则：${rule.pattern}\n" +
+                "执行指令：${rule.command}"
+      )
+      .setPositiveButton("编辑") { _, _ ->
+        showCustomCommandEditor(rule, onChanged)
+      }
+      .setNeutralButton(nextEnabled) { _, _ ->
+        upsertCustomCommand(
+          rule.copy(
+            enabled = !rule.enabled,
+            updatedAt = System.currentTimeMillis()
+          ),
+          onChanged
+        )
+      }
+      .setNegativeButton("删除") { _, _ ->
+        confirmDeleteCustomCommand(rule, onChanged)
+      }
+      .show()
+  }
+
+  private fun upsertCustomCommand(
+    rule: CustomCommandRule,
+    onChanged: () -> Unit
+  ) {
+    val rules = latestLlmConfig.customCommandRules.toMutableList()
+    val index = rules.indexOfFirst { it.id == rule.id }
+
+    if (index >= 0) {
+      rules[index] = rule
+    } else {
+      rules.add(rule)
+    }
+
+    saveAivsRulesConfig(
+      latestLlmConfig.copy(customCommandRules = rules),
+      onChanged
+    )
+  }
+
+  private fun confirmDeleteCustomCommand(
+    rule: CustomCommandRule,
+    onChanged: () -> Unit
+  ) {
+    AlertDialog.Builder(context)
+      .setTitle("删除自定义指令")
+      .setMessage(
+        "${rule.name}\n${rule.pattern}\n\n执行：${rule.command}"
+      )
+      .setPositiveButton("删除") { _, _ ->
+        saveAivsRulesConfig(
+          latestLlmConfig.copy(
+            customCommandRules =
+              latestLlmConfig.customCommandRules.filterNot { it.id == rule.id }
+          ),
+          onChanged
+        )
+      }
+      .setNegativeButton("取消", null)
+      .show()
+  }
+
+  private fun showCustomCommandEditor(
+    rule: CustomCommandRule?,
+    onChanged: () -> Unit
+  ) {
+    val nameInput = EditText(context).apply {
+      minLines = 1
+      setText(rule?.name.orEmpty())
+      setSelection(text.length)
+      hint = "例如：打开客厅灯"
+    }
+
+    val patternInput = EditText(context).apply {
+      minLines = 2
+      setText(rule?.pattern.orEmpty())
+      setSelection(text.length)
+      hint = "关键词或正则表达式"
+    }
+
+    val commandInput = EditText(context).apply {
+      minLines = 3
+      setText(rule?.command.orEmpty())
+      setSelection(text.length)
+      hint = "例如：curl http://127.0.0.1:8080/light"
+    }
+
+    val regexCheck = CheckBox(context).apply {
+      text = "使用正则表达式"
+      isChecked = rule?.regex ?: false
+    }
+
+    val containsCheck = CheckBox(context).apply {
+      text = "包含匹配"
+      isChecked = rule?.contains ?: true
+    }
+
+    val enabledCheck = CheckBox(context).apply {
+      text = "启用规则"
+      isChecked = rule?.enabled ?: true
+    }
+
+    val content = LinearLayout(context).apply {
+      orientation = LinearLayout.VERTICAL
+
+      val padding = context.dp(20)
+
+      setPadding(
+        padding,
+        padding / 2,
+        padding,
+        0
+      )
+
+      addView(nameInput)
+      addView(patternInput)
+      addView(regexCheck)
+      addView(containsCheck)
+
+      addView(commandInput)
+      addView(enabledCheck)
+    }
+
+    AlertDialog.Builder(context)
+      .setTitle(
+        if (rule == null) {
+          "新增指令"
+        } else {
+          "编辑指令"
+        }
+      )
+      .setView(content)
+      .setPositiveButton("保存", null)
+      .setNegativeButton("取消", null)
+      .create()
+      .apply {
+        setOnShowListener {
+
+          getButton(
+            AlertDialog.BUTTON_POSITIVE
+          ).setOnClickListener {
+
+            val name =
+              nameInput.text
+                ?.toString()
+                .orEmpty()
+                .trim()
+
+            val pattern =
+              patternInput.text
+                ?.toString()
+                .orEmpty()
+                .trim()
+
+            val command =
+              commandInput.text
+                ?.toString()
+                .orEmpty()
+                .trim()
+
+            if (name.isBlank()) {
+              Toast.makeText(
+                context,
+                "请输入指令名称",
+                Toast.LENGTH_SHORT
+              ).show()
+
+              return@setOnClickListener
+            }
+
+            if (pattern.isBlank()) {
+              Toast.makeText(
+                context,
+                "请输入匹配规则",
+                Toast.LENGTH_SHORT
+              ).show()
+
+              return@setOnClickListener
+            }
+
+            if (command.isBlank()) {
+              Toast.makeText(
+                context,
+                "请输入执行指令",
+                Toast.LENGTH_SHORT
+              ).show()
+
+              return@setOnClickListener
+            }
+
+            val error =
+              CustomCommandMatcher.validate(
+                pattern,
+                regexCheck.isChecked
+              )
+
+            if (error != null) {
+              Toast.makeText(
+                context,
+                error,
+                Toast.LENGTH_SHORT
+              ).show()
+
+              return@setOnClickListener
+            }
+
+            val now =
+              System.currentTimeMillis()
+
+            upsertCustomCommand(
+              CustomCommandRule(
+                id = rule?.id
+                  ?: UUID.randomUUID().toString(),
+
+                name = name,
+
+                pattern = pattern,
+
+                command = command,
+
+                enabled =
+                  enabledCheck.isChecked,
+
+                regex =
+                  regexCheck.isChecked,
+
+                contains =
+                  containsCheck.isChecked,
+
+                createdAt =
+                  rule?.createdAt ?: now,
+
+                updatedAt = now
+              ),
+              onChanged
+            )
+
+            dismiss()
+          }
+        }
+      }
+      .show()
+  }
+
+  private fun customCommandRuleSummary(
+    rule: CustomCommandRule
+  ): String {
+    return buildString {
+
+      append(
+        if (rule.regex) {
+          if (rule.contains) {
+            "正则包含"
+          } else {
+            "正则全匹配"
+          }
+        } else {
+          if (rule.contains) {
+            "关键词包含"
+          } else {
+            "关键词等于"
+          }
+        }
+      )
+
+      if (rule.command.isNotBlank()) {
+        append(" · ")
+        append(
+          rule.command
+            .replace("\n", " ")
+            .take(100)
+        )
+      }
     }
   }
 
@@ -690,6 +1087,7 @@ internal class EmbeddedSettingsViewController(
   }
 
   private suspend fun saveConfigBlocking(config: LlmConfig): Boolean {
+    Log.w("config", "saveConfigBlocking LlmConfig: $config")
     return withContext(NonCancellable + Dispatchers.IO) {
       runCatching {
         runtime.configRepository.save(config)

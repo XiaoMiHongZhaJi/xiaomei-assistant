@@ -60,6 +60,14 @@ class SettingsMainFragment : BaseRootLayoutFragment() {
           }
         ),
         TextListItem(
+          title = "自定义指令",
+          summary = "配置自定义指令，命中后执行",
+          divider = false,
+          onClick = {
+            requireSettingsHostActivity().presentFragment(CustomCommandFragment.newInstance(currentEntrySource()))
+          }
+        ),
+        TextListItem(
           title = "接管规则",
           summary = "配置 ASR 黑名单，命中后放行官方 reply",
           divider = false,

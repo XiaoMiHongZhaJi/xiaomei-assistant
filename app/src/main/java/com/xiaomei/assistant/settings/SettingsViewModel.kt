@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiaomei.assistant.model.AivsAsrBlacklistRule
+import com.xiaomei.assistant.model.CustomCommandRule
 import com.xiaomei.assistant.model.ConversationMessageRole
 import com.xiaomei.assistant.model.ConversationState
 import com.xiaomei.assistant.model.LlmConfig
@@ -15,7 +16,6 @@ import com.xiaomei.assistant.runtime.RuntimeContainer
 import com.xiaomei.assistant.status.AivsDebugSnapshot
 import com.xiaomei.assistant.status.AivsDebugSnapshotStore
 import com.xiaomei.assistant.status.ModuleProcessStatus
-import com.xiaomei.assistant.status.ModuleRuntimeSnapshot
 import com.xiaomei.assistant.status.ModuleRuntimeStatusStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -123,6 +123,35 @@ class SettingsViewModel(
     }
   }
 
+  fun setCustomCommandEnabled(enabled: Boolean) {
+    viewModelScope.launch {
+      runCatching {
+        val config = container.configRepository.config.value
+        container.configRepository.save(config.copy(customCommandEnabled = enabled))
+      }
+        .onSuccess { refreshDiagnostics() }
+        .onFailure { diagnostics.value = buildDiagnostics(lastError = it.message ?: it.javaClass.simpleName) }
+    }
+  }
+
+  fun upsertCustomCommandRule(rule: CustomCommandRule) {
+    viewModelScope.launch {
+      runCatching {
+        val config = container.configRepository.config.value
+        val rules = config.customCommandRules.toMutableList()
+        val index = rules.indexOfFirst { it.id == rule.id }
+        if (index >= 0) {
+          rules[index] = rule
+        } else {
+          rules.add(rule)
+        }
+        container.configRepository.save(config.copy(customCommandRules = rules))
+      }
+        .onSuccess { refreshDiagnostics() }
+        .onFailure { diagnostics.value = buildDiagnostics(lastError = it.message ?: it.javaClass.simpleName) }
+    }
+  }
+
   fun upsertAsrBlacklistRule(rule: AivsAsrBlacklistRule) {
     viewModelScope.launch {
       runCatching {
@@ -135,6 +164,19 @@ class SettingsViewModel(
           rules.add(rule)
         }
         container.configRepository.save(config.copy(asrBlacklistRules = rules))
+      }
+        .onSuccess { refreshDiagnostics() }
+        .onFailure { diagnostics.value = buildDiagnostics(lastError = it.message ?: it.javaClass.simpleName) }
+    }
+  }
+
+  fun deleteCustomCommandRule(id: String) {
+    viewModelScope.launch {
+      runCatching {
+        val config = container.configRepository.config.value
+        container.configRepository.save(
+          config.copy(customCommandRules = config.customCommandRules.filterNot { it.id == id })
+        )
       }
         .onSuccess { refreshDiagnostics() }
         .onFailure { diagnostics.value = buildDiagnostics(lastError = it.message ?: it.javaClass.simpleName) }

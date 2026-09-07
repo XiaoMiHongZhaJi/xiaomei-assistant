@@ -56,6 +56,7 @@ class SettingsUiHostController(
     return when (entryTarget) {
       HostSettingsNavigation.targetLlmConfig -> LlmConfigFragment.newInstance(entrySource)
       HostSettingsNavigation.targetAivsRules -> AivsRulesFragment.newInstance(entrySource)
+      HostSettingsNavigation.targetCustomCommand -> CustomCommandFragment.newInstance(entrySource)
       HostSettingsNavigation.targetRuntimeStatus -> StatusFragment.newInstance(entrySource, HostSettingsNavigation.targetRuntimeStatus)
       HostSettingsNavigation.targetAivsStatus -> StatusFragment.newInstance(entrySource, HostSettingsNavigation.targetAivsStatus)
       HostSettingsNavigation.targetSessionHistory -> HistoryFragment.newInstance(entrySource)

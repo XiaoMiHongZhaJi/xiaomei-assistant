@@ -1,5 +1,6 @@
 ﻿package com.xiaomei.assistant.data
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import com.xiaomei.assistant.bridge.ModuleRemoteStoreBridge
@@ -24,6 +25,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class MemorySnapshot(
   val records: List<MemoryRecord> = emptyList()

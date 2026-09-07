@@ -1,5 +1,6 @@
 package com.xiaomei.assistant.data
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import com.xiaomei.assistant.bridge.ModuleRemoteStoreBridge
@@ -20,6 +21,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class HistorySnapshot(
   val records: List<SessionRecord> = emptyList()

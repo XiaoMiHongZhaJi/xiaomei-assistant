@@ -1,7 +1,10 @@
 ﻿package com.xiaomei.assistant.model
 
+import android.annotation.SuppressLint
+import com.xiaomei.assistant.xposed.HookLog
 import kotlinx.serialization.Serializable
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class LlmConfig(
   val baseUrl: String = "https://api.openai.com",
@@ -13,9 +16,12 @@ data class LlmConfig(
   val temperature: Float = 0.7f,
   val maxTokens: Int = 1024,
   val asrBlacklistEnabled: Boolean = false,
-  val asrBlacklistRules: List<AivsAsrBlacklistRule> = emptyList()
+  val asrBlacklistRules: List<AivsAsrBlacklistRule> = emptyList(),
+  val customCommandEnabled: Boolean = true,
+  val customCommandRules: List<CustomCommandRule> = emptyList()
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class AivsAsrBlacklistRule(
   val id: String,
@@ -26,6 +32,171 @@ data class AivsAsrBlacklistRule(
   val createdAt: Long,
   val updatedAt: Long
 )
+
+@SuppressLint("UnsafeOptInUsageError")
+@Serializable
+data class CustomCommandRule(
+  val id: String,
+  val name: String,
+  val pattern: String,
+  val command: String,
+  val enabled: Boolean = true,
+  val regex: Boolean = false,
+  val contains: Boolean = true,
+  val createdAt: Long = System.currentTimeMillis(),
+  val updatedAt: Long = System.currentTimeMillis()
+)
+
+data class CustomCommandMatch(
+  val rule: CustomCommandRule,
+  val input: String,
+  val groups: List<String>
+)
+
+object CustomCommandMatcher {
+  fun match(
+    input: String,
+    config: LlmConfig
+  ): CustomCommandMatch? {
+    if (!config.customCommandEnabled || input.isBlank()) {
+      return null
+    }
+    var rules = config.customCommandRules
+    for (rule in rules) {
+      if (!rule.enabled) continue
+
+      val result = if (rule.regex) {
+        matchRegex(input, rule)
+      } else {
+        matchKeyword(input, rule)
+      }
+
+      if (result != null) {
+        return CustomCommandMatch(
+          rule = rule,
+          input = input,
+          groups = result
+        )
+      }
+    }
+
+    return null
+  }
+
+  private fun matchKeyword(
+    input: String,
+    rule: CustomCommandRule
+  ): List<String>? {
+    return if (rule.contains) {
+      if (input.contains(rule.pattern)) {
+        emptyList()
+      } else {
+        null
+      }
+    } else {
+      if (input == rule.pattern) {
+        emptyList()
+      } else {
+        null
+      }
+    }
+  }
+
+  private fun matchRegex(
+    input: String,
+    rule: CustomCommandRule
+  ): List<String>? {
+    val regex = try {
+      Regex(rule.pattern)
+    } catch (_: Exception) {
+      return null
+    }
+
+    val match = if (rule.contains) {
+      regex.find(input)
+    } else {
+      regex.matchEntire(input)
+    } ?: return null
+
+    return match.groupValues.drop(1)
+  }
+
+  fun validate(pattern: String, regex: Boolean): String? {
+    val trimmed = pattern.trim()
+    if (trimmed.isBlank()) {
+      return "规则内容不能为空"
+    }
+    if (regex) {
+      val error = runCatching { Regex(trimmed) }.exceptionOrNull()
+      if (error != null) {
+        return "正则表达式无效：${error.message ?: error.javaClass.simpleName}"
+      }
+    }
+    return null
+  }
+}
+
+object CustomCommandExecutor {
+
+  fun executeAsync(
+    match: CustomCommandMatch
+  ) {
+    Thread {
+      try {
+        val command = expandCommand(match)
+
+        HookLog.i(
+          "AIVS custom command executing " +
+                  "rule=${match.rule.id} " +
+                  "command=${command.take(300)}"
+        )
+
+        val process = ProcessBuilder(
+          "/system/bin/sh",
+          "-c",
+          command
+        )
+          .redirectErrorStream(true)
+          .start()
+
+        val exitCode = process.waitFor()
+
+        HookLog.i(
+          "AIVS custom command finished " +
+                  "rule=${match.rule.id} " +
+                  "exitCode=$exitCode"
+        )
+
+      } catch (e: Throwable) {
+        HookLog.e(
+          "AIVS custom command failed " +
+                  "rule=${match.rule.id}",
+          e
+        )
+      }
+    }.start()
+  }
+
+  private fun expandCommand(
+    match: CustomCommandMatch
+  ): String {
+    var command = match.rule.command
+
+    command = command.replace(
+      "{input}",
+      match.input
+    )
+
+    match.groups.forEachIndexed { index, value ->
+      command = command.replace(
+        "$${index + 1}",
+        value
+      )
+    }
+
+    return command
+  }
+}
 
 object AivsAsrBlacklistMatcher {
   fun firstMatch(text: String, config: LlmConfig): AivsAsrBlacklistRule? {
@@ -101,6 +272,7 @@ object LlmApiMode {
   }
 }
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class SessionRecord(
   val sessionId: String,
@@ -112,6 +284,7 @@ data class SessionRecord(
   val updatedAt: Long
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ConversationRecord(
   val id: String,
@@ -122,6 +295,7 @@ data class ConversationRecord(
   val lastMessagePreview: String = ""
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ConversationMessageRecord(
   val id: String,
@@ -131,6 +305,7 @@ data class ConversationMessageRecord(
   val createdAt: Long
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ConversationState(
   val activeConversationId: String = "",
@@ -146,6 +321,7 @@ object ConversationMessageRole {
   const val ASSISTANT = "assistant"
 }
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class MemoryRecord(
   val id: String,
@@ -157,6 +333,7 @@ data class MemoryRecord(
   val updatedAt: Long
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class MemoryToolAction(
   val action: String,

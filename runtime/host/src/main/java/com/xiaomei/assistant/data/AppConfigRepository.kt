@@ -13,10 +13,12 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.xiaomei.assistant.bridge.ModuleRemoteStoreBridge
 import com.xiaomei.assistant.bridge.ModuleSyncServiceClient
 import com.xiaomei.assistant.model.AivsAsrBlacklistRule
+import com.xiaomei.assistant.model.CustomCommandRule
 import com.xiaomei.assistant.model.LlmApiMode
 import com.xiaomei.assistant.model.LlmConfig
 import com.xiaomei.assistant.model.LlmProvider
 import com.xiaomei.assistant.runtime.StartupInfo
+import com.xiaomei.assistant.xposed.HookLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,7 +26,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 private val Context.configStore: DataStore<Preferences> by preferencesDataStore(name = "xiaomei_config")
@@ -44,6 +45,8 @@ class AppConfigRepository(
     const val maxTokensName = "llm.maxTokens"
     const val asrBlacklistEnabledName = "aivs.asrBlacklist.enabled"
     const val asrBlacklistRulesName = "aivs.asrBlacklist.rules"
+    const val customCommandEnabledName = "aivs.customCommand.enabled"
+    const val customCommandRulesName = "aivs.customCommand.rules"
     const val hostOverrideEnabledName = "llm.hostOverrideEnabled"
     const val updatedAtName = "llm.updatedAt"
   }
@@ -59,6 +62,8 @@ class AppConfigRepository(
     val maxTokens = intPreferencesKey(KeyNames.maxTokensName)
     val asrBlacklistEnabled = booleanPreferencesKey(KeyNames.asrBlacklistEnabledName)
     val asrBlacklistRules = stringPreferencesKey(KeyNames.asrBlacklistRulesName)
+    val customCommandEnabled = booleanPreferencesKey(KeyNames.customCommandEnabledName)
+    val customCommandRules = stringPreferencesKey(KeyNames.customCommandRulesName)
   }
 
   val config: StateFlow<LlmConfig> = context.configStore.data
@@ -73,6 +78,7 @@ class AppConfigRepository(
 
   suspend fun save(config: LlmConfig) {
     if (isInHostProcess()) {
+      HookLog.w("config isInHostProcess LlmConfig: " + config)
       val hostOverrideWritten = writeHostOverride(context, config)
       writeConfig(context, config)
       writeLocalCache(context, config)
@@ -89,6 +95,7 @@ class AppConfigRepository(
       }
       return
     }
+    HookLog.w("config is not InHostProcess LlmConfig: " + config)
     writeConfig(context, config)
     writeLocalCache(context, config)
     ModuleRemoteStoreBridge.writeLlmConfig(config)
@@ -129,6 +136,7 @@ class AppConfigRepository(
       encodeDefaults = true
     }
     private val asrBlacklistRuleListSerializer = ListSerializer(AivsAsrBlacklistRule.serializer())
+    private val customCommandRuleListSerializer = ListSerializer(CustomCommandRule.serializer())
 
     private data class ConfigSnapshot(
       val config: LlmConfig,
@@ -154,6 +162,8 @@ class AppConfigRepository(
         prefs[Keys.maxTokens] = config.maxTokens
         prefs[Keys.asrBlacklistEnabled] = config.asrBlacklistEnabled
         prefs[Keys.asrBlacklistRules] = encodeAsrBlacklistRules(config.asrBlacklistRules)
+        prefs[Keys.customCommandEnabled] = config.customCommandEnabled
+        prefs[Keys.customCommandRules] = encodeCustomCommandRules(config.customCommandRules)
       }
     }
 
@@ -174,34 +184,18 @@ class AppConfigRepository(
         .commit()
     }
 
-    private fun writeHostOverride(context: Context, config: LlmConfig): Boolean {
+    private fun writeLocalCache(context: Context, config: LlmConfig): Boolean {
       return writeSharedPreferences(
-        context.getSharedPreferences(HOST_OVERRIDE_PREFERENCES_NAME, Context.MODE_PRIVATE).edit(),
+        context.getSharedPreferences(LOCAL_CACHE_PREFERENCES_NAME, Context.MODE_PRIVATE).edit(),
         config
       )
         .putBoolean(KeyNames.hostOverrideEnabledName, true)
         .commit()
     }
 
-    private fun readHostOverride(context: Context): LlmConfig? {
-      return readHostOverrideSnapshot(context)?.config
-    }
-
-    private fun readHostOverrideSnapshot(context: Context): ConfigSnapshot? {
-      val prefs = context.getSharedPreferences(HOST_OVERRIDE_PREFERENCES_NAME, Context.MODE_PRIVATE)
-      if (!prefs.getBoolean(KeyNames.hostOverrideEnabledName, false)) {
-        return null
-      }
-      return ConfigSnapshot(
-        config = mapSharedPreferencesStatic(prefs),
-        updatedAt = prefs.getLong(KeyNames.updatedAtName, 0L),
-        source = "host override"
-      )
-    }
-
-    private fun writeLocalCache(context: Context, config: LlmConfig): Boolean {
+    private fun writeHostOverride(context: Context, config: LlmConfig): Boolean {
       return writeSharedPreferences(
-        context.getSharedPreferences(LOCAL_CACHE_PREFERENCES_NAME, Context.MODE_PRIVATE).edit(),
+        context.getSharedPreferences(HOST_OVERRIDE_PREFERENCES_NAME, Context.MODE_PRIVATE).edit(),
         config
       )
         .putBoolean(KeyNames.hostOverrideEnabledName, true)
@@ -224,6 +218,22 @@ class AppConfigRepository(
       )
     }
 
+    private fun readHostOverride(context: Context): LlmConfig? {
+      return readHostOverrideSnapshot(context)?.config
+    }
+
+    private fun readHostOverrideSnapshot(context: Context): ConfigSnapshot? {
+      val prefs = context.getSharedPreferences(HOST_OVERRIDE_PREFERENCES_NAME, Context.MODE_PRIVATE)
+      if (!prefs.getBoolean(KeyNames.hostOverrideEnabledName, false)) {
+        return null
+      }
+      return ConfigSnapshot(
+        config = mapSharedPreferencesStatic(prefs),
+        updatedAt = prefs.getLong(KeyNames.updatedAtName, 0L),
+        source = "host override"
+      )
+    }
+
     private fun writeSharedPreferences(
       editor: SharedPreferences.Editor,
       config: LlmConfig
@@ -239,6 +249,8 @@ class AppConfigRepository(
         .putInt(KeyNames.maxTokensName, config.maxTokens)
         .putBoolean(KeyNames.asrBlacklistEnabledName, config.asrBlacklistEnabled)
         .putString(KeyNames.asrBlacklistRulesName, encodeAsrBlacklistRules(config.asrBlacklistRules))
+        .putBoolean(KeyNames.customCommandEnabledName, config.customCommandEnabled)
+        .putString(KeyNames.customCommandRulesName, encodeCustomCommandRules(config.customCommandRules))
         .putLong(KeyNames.updatedAtName, System.currentTimeMillis())
     }
 
@@ -263,7 +275,9 @@ class AppConfigRepository(
         temperature = prefs[Keys.temperature] ?: LlmConfig().temperature,
         maxTokens = prefs[Keys.maxTokens] ?: LlmConfig().maxTokens,
         asrBlacklistEnabled = prefs[Keys.asrBlacklistEnabled] ?: LlmConfig().asrBlacklistEnabled,
-        asrBlacklistRules = decodeAsrBlacklistRules(prefs[Keys.asrBlacklistRules])
+        asrBlacklistRules = decodeAsrBlacklistRules(prefs[Keys.asrBlacklistRules]),
+        customCommandEnabled = prefs[Keys.customCommandEnabled] ?: LlmConfig().customCommandEnabled,
+        customCommandRules = decodeCustomCommandRules(prefs[Keys.customCommandRules])
       )
     }
 
@@ -282,7 +296,9 @@ class AppConfigRepository(
         temperature = prefs.getFloat(KeyNames.temperatureName, defaults.temperature),
         maxTokens = prefs.getInt(KeyNames.maxTokensName, defaults.maxTokens),
         asrBlacklistEnabled = prefs.getBoolean(KeyNames.asrBlacklistEnabledName, defaults.asrBlacklistEnabled),
-        asrBlacklistRules = decodeAsrBlacklistRules(prefs.getString(KeyNames.asrBlacklistRulesName, null))
+        asrBlacklistRules = decodeAsrBlacklistRules(prefs.getString(KeyNames.asrBlacklistRulesName, null)),
+        customCommandEnabled = prefs.getBoolean(KeyNames.customCommandEnabledName, defaults.customCommandEnabled),
+        customCommandRules = decodeCustomCommandRules(prefs.getString(KeyNames.customCommandRulesName, null))
       )
     }
 
@@ -336,7 +352,9 @@ class AppConfigRepository(
         prefs.contains(KeyNames.providerName) ||
         prefs.contains(KeyNames.apiModeName) ||
         prefs.contains(KeyNames.asrBlacklistEnabledName) ||
-        prefs.contains(KeyNames.asrBlacklistRulesName)
+        prefs.contains(KeyNames.asrBlacklistRulesName) ||
+        prefs.contains(KeyNames.customCommandEnabledName) ||
+        prefs.contains(KeyNames.customCommandRulesName)
     }
 
     private fun writeRemoteConfigFromHost(config: LlmConfig): Boolean {
@@ -363,6 +381,19 @@ class AppConfigRepository(
       }
       return runCatching {
         json.decodeFromString(asrBlacklistRuleListSerializer, raw)
+      }.getOrDefault(emptyList())
+    }
+
+    private fun encodeCustomCommandRules(rules: List<CustomCommandRule>): String {
+      return json.encodeToString(customCommandRuleListSerializer, rules)
+    }
+
+    private fun decodeCustomCommandRules(raw: String?): List<CustomCommandRule> {
+      if (raw.isNullOrBlank()) {
+        return emptyList()
+      }
+      return runCatching {
+        json.decodeFromString(customCommandRuleListSerializer, raw)
       }.getOrDefault(emptyList())
     }
   }
