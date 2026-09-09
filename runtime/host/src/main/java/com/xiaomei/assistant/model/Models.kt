@@ -7,12 +7,12 @@ import kotlinx.serialization.Serializable
 @SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class LlmConfig(
-  val baseUrl: String = "https://api.openai.com",
+  val baseUrl: String = "https://generativelanguage.googleapis.com",
   val apiKey: String = "",
-  val model: String = "gpt-4.1-mini",
-  val provider: String = LlmProvider.OPENAI,
-  val apiMode: String = LlmApiMode.OPENAI_CHAT_COMPLETIONS,
-  val systemPrompt: String = "你是小美，一名简洁、直接、可靠的中文 AI 助手。回答要自然，尽量像手环上的小爱同学。",
+  val model: String = "gemini-2.5-flash-lite",
+  val provider: String = LlmProvider.GEMINI,
+  val apiMode: String = LlmApiMode.GEMINI_GENERATE_CONTENT,
+  val systemPrompt: String = "你是小美，一个脾气不好的中文 AI 助手。回答要专业、简练、有用，但同时也阴阳怪气、不耐烦。回答不超过50个字",
   val temperature: Float = 0.7f,
   val maxTokens: Int = 1024,
   val asrBlacklistEnabled: Boolean = false,
@@ -145,32 +145,21 @@ object CustomCommandExecutor {
       try {
         val command = expandCommand(match)
 
-        HookLog.i(
-          "AIVS custom command executing " +
-                  "rule=${match.rule.id} " +
-                  "command=${command.take(300)}"
-        )
+        HookLog.i("AIVS custom command executing, command=${command.take(1000)}")
 
-        val process = ProcessBuilder(
-          "/system/bin/sh",
-          "-c",
-          command
-        )
+        val process = ProcessBuilder("/system/bin/sh", "-c", command)
           .redirectErrorStream(true)
           .start()
 
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+
         val exitCode = process.waitFor()
 
-        HookLog.i(
-          "AIVS custom command finished " +
-                  "rule=${match.rule.id} " +
-                  "exitCode=$exitCode"
-        )
+        HookLog.i("AIVS custom command finished, exitCode=$exitCode, output=$output")
 
       } catch (e: Throwable) {
         HookLog.e(
-          "AIVS custom command failed " +
-                  "rule=${match.rule.id}",
+          "AIVS custom command failed, rule=${match.rule.id}",
           e
         )
       }

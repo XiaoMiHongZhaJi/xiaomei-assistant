@@ -1471,12 +1471,23 @@ class AivsRuntimeHook : HostHook {
     return "$type: ${rule.pattern.take(120)}"
   }
 
+  // 用于记录上次对话内容，防止重复记录
+  private var lastContent = ""
+
   private fun persistHistory(state: AivsSessionState) {
     val question = state.finalAsr?.trim().orEmpty()
     val answer = state.llmAnswer?.trim().orEmpty()
     if (question.isBlank() || answer.isBlank()) {
       return
     }
+    val sessionKey = "${state.did}_${state.sessionId}"
+    // 如果已经存在，说明该对话内容已被底层 Hook 或高层 Hook 持久化过，直接拦截
+    if (lastContent == question + answer) {
+      HookLog.w("AIVS history persistence skipped (already persisted) for finalAsr=$question, llmAnswer=$answer, key=$sessionKey")
+      return
+    }
+    lastContent = question + answer
+    HookLog.i("persistHistory called, question=$question, answer=$answer, key=$sessionKey")
     val container = HookRuntimeResolver.resolve() ?: run {
       HookLog.w("Skip history persistence because runtime container is unavailable did=${state.did}")
       return
@@ -1490,6 +1501,7 @@ class AivsRuntimeHook : HostHook {
           "AIVS conversation persisted did=${state.did} sessionId=${state.sessionId} " +
             "conversation=${conversation.id} title=${conversation.title}"
         )
+        //维护记忆内容
         maintainMemories(container, state, question, answer, conversation.id)
       }.onFailure { throwable ->
         AivsDebugSnapshotStore.reportHistoryPersistFailed(

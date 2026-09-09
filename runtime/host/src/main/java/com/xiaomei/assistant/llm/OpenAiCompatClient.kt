@@ -1,5 +1,6 @@
 ﻿package com.xiaomei.assistant.llm
 
+import android.annotation.SuppressLint
 import com.xiaomei.assistant.model.LlmConfig
 import com.xiaomei.assistant.model.LlmApiMode
 import com.xiaomei.assistant.model.LlmProvider
@@ -8,6 +9,7 @@ import com.xiaomei.assistant.model.MemoryToolAction
 import com.xiaomei.assistant.model.ConversationMessageRecord
 import com.xiaomei.assistant.model.ConversationMessageRole
 import com.xiaomei.assistant.runtime.StartupInfo
+import com.xiaomei.assistant.xposed.HookLog
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +36,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.time.LocalDate
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class ChatMessage(
   val role: String,
@@ -42,6 +45,7 @@ data class ChatMessage(
   @SerialName("tool_call_id") val toolCallId: String? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiChatRequest(
   val model: String,
@@ -53,12 +57,14 @@ data class OpenAiChatRequest(
   @SerialName("tool_choice") val toolChoice: JsonElement? = null
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiTool(
   val type: String = "function",
   val function: OpenAiToolFunction
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiToolFunction(
   val name: String,
@@ -66,6 +72,7 @@ data class OpenAiToolFunction(
   val parameters: JsonObject
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiToolCall(
   val id: String,
@@ -73,22 +80,26 @@ data class OpenAiToolCall(
   val function: OpenAiToolCallFunction
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiToolCallFunction(
   val name: String,
   val arguments: String
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiChatResponse(
   val choices: List<OpenAiChoice> = emptyList()
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 data class OpenAiChoice(
   val message: ChatMessage
 )
 
+@SuppressLint("UnsafeOptInUsageError")
 @Serializable
 private data class MemoryExtractionPayload(
   val actions: List<MemoryToolAction> = emptyList()
@@ -160,6 +171,14 @@ class OpenAiCompatClient(
   ): List<MemoryToolAction> = withContext(Dispatchers.IO) {
     if (question.isBlank() || answer.isBlank()) return@withContext emptyList()
     when {
+      usesGemini(config) -> {
+        executeGeminiMemoryRequest(
+          config = config,
+          question = question,
+          answer = answer,
+          existingMemories = existingMemories
+        )
+      }
       usesOpenAiResponses(config) -> runCatching {
         parseResponsesToolActions(
           executeResponsesJsonRequest(config, buildResponsesMemoryToolRequest(config, question, answer, existingMemories))
@@ -185,6 +204,96 @@ class OpenAiCompatClient(
     }
   }
 
+  private fun buildGeminiRequestBody(
+    config: LlmConfig,
+    contents: JsonArray,
+    systemPrompt: String,
+    temperature: Float,
+    maxTokens: Int
+  ): JsonObject {
+    return buildJsonObject {
+      if (systemPrompt.isNotBlank()) {
+        put(
+          "systemInstruction",
+          buildJsonObject {
+            putJsonArray("parts") {
+              add(buildJsonObject {
+                put("text", systemPrompt)
+              })
+            }
+          }
+        )
+      }
+
+      put("contents", contents)
+
+      put(
+        "generationConfig",
+        buildJsonObject {
+          if (isModelAllowTemperature(config.model)) {
+            put("temperature", temperature)
+          }
+          put("maxOutputTokens", maxTokens)
+          if (maxTokens == 512) {
+            put("responseMimeType", "application/json")
+          }
+        }
+      )
+    }
+  }
+
+  private fun buildGeminiContent(
+    role: String,
+    text: String
+  ): JsonObject {
+    return buildJsonObject {
+      put("role", role)
+      putJsonArray("parts") {
+        add(buildJsonObject {
+          put("text", text)
+        })
+      }
+    }
+  }
+
+  private fun executeGeminiMemoryRequest(
+    config: LlmConfig,
+    question: String,
+    answer: String,
+    existingMemories: List<MemoryRecord>
+  ): List<MemoryToolAction> {
+    val requestBody = buildGeminiMemoryRequest(
+      config = config,
+      question = question,
+      answer = answer,
+      existingMemories = existingMemories
+    )
+
+    val response = executeGeminiRequest(config, requestBody)
+    return parseFallbackActionsFromText(parseGeminiText(response))
+  }
+
+  private fun buildGeminiMemoryRequest(
+    config: LlmConfig,
+    question: String,
+    answer: String,
+    existingMemories: List<MemoryRecord>
+  ): JsonObject {
+    val prompt = memoryExtractionUserPrompt(question, answer, existingMemories) +
+            "\n输出格式：{\"actions\":[{\"action\":\"create\",\"content\":\"...\"}]}"
+
+    return buildGeminiRequestBody(
+      config = config,
+      contents = buildJsonArray {
+        add(buildGeminiContent("user", prompt))
+      },
+      systemPrompt = memoryToolSystemPrompt(existingMemories) +
+              "\n你必须只输出 JSON，不要输出 Markdown。",
+      temperature = 0.1f,
+      maxTokens = 512
+    )
+  }
+
   fun buildRequest(
     config: LlmConfig,
     messages: List<ConversationMessageRecord>,
@@ -193,10 +302,7 @@ class OpenAiCompatClient(
   ): OpenAiChatRequest {
     val chatMessages = buildList {
       add(ChatMessage(role = "system", content = buildSystemPrompt(config, memories)))
-      messages
-        .filter { it.content.isNotBlank() && (it.role == ConversationMessageRole.USER || it.role == ConversationMessageRole.ASSISTANT) }
-        .sortedBy { it.createdAt }
-        .forEach { item ->
+      validConversationMessages(messages).forEach { item ->
           add(ChatMessage(role = item.role, content = item.content))
         }
       add(ChatMessage(role = "user", content = userMessage))
@@ -217,10 +323,7 @@ class OpenAiCompatClient(
     userMessage: String
   ): JsonObject {
     val input = buildJsonArray {
-      messages
-        .filter { it.content.isNotBlank() && (it.role == ConversationMessageRole.USER || it.role == ConversationMessageRole.ASSISTANT) }
-        .sortedBy { it.createdAt }
-        .forEach { item ->
+      validConversationMessages(messages).forEach { item ->
           add(responsesContentItem(item.role, item.content))
         }
       add(responsesContentItem("user", userMessage))
@@ -319,90 +422,37 @@ class OpenAiCompatClient(
     userMessage: String
   ): JsonObject {
     val contents = buildJsonArray {
-      messages
-        .filter {
-          it.content.isNotBlank() &&
-                  (
-                          it.role == ConversationMessageRole.USER ||
-                                  it.role == ConversationMessageRole.ASSISTANT
-                          )
-        }
-        .sortedBy { it.createdAt }
-        .forEach { item ->
-          add(
-            buildJsonObject {
-              put(
-                "role",
-                if (item.role == ConversationMessageRole.USER) {
-                  "user"
-                } else {
-                  "model"
-                }
-              )
-
-              putJsonArray("parts") {
-                add(
-                  buildJsonObject {
-                    put("text", item.content)
-                  }
-                )
-              }
-            }
+      validConversationMessages(messages).forEach { item ->
+        add(
+          buildGeminiContent(
+            role = if (item.role == ConversationMessageRole.USER) "user" else "model",
+            text = item.content
           )
-        }
-
-      add(
-        buildJsonObject {
-          put("role", "user")
-
-          putJsonArray("parts") {
-            add(
-              buildJsonObject {
-                put("text", userMessage)
-              }
-            )
-          }
-        }
-      )
-    }
-
-    return buildJsonObject {
-      val systemPrompt = buildSystemPrompt(config, memories)
-
-      if (systemPrompt.isNotBlank()) {
-        put(
-          "systemInstruction",
-          buildJsonObject {
-            putJsonArray("parts") {
-              add(
-                buildJsonObject {
-                  put("text", systemPrompt)
-                }
-              )
-            }
-          }
         )
       }
 
-      put("contents", contents)
-
-      if (isModelAllowTemperature(config.model)) {
-        put(
-          "generationConfig",
-          buildJsonObject {
-            put("temperature", config.temperature)
-            put("maxOutputTokens", config.maxTokens)
-          }
-        )
-      } else {
-        put(
-          "generationConfig",
-          buildJsonObject {
-            put("maxOutputTokens", config.maxTokens)
-          }
-        )
-      }
+      add(buildGeminiContent("user", userMessage))
     }
+
+    return buildGeminiRequestBody(
+      config = config,
+      contents = contents,
+      systemPrompt = buildSystemPrompt(config, memories),
+      temperature = config.temperature,
+      maxTokens = config.maxTokens
+    )
+  }
+
+  private fun validConversationMessages(
+    messages: List<ConversationMessageRecord>
+  ): List<ConversationMessageRecord> {
+    return messages
+      .filter {
+        it.content.isNotBlank() &&
+                (it.role == ConversationMessageRole.USER ||
+                        it.role == ConversationMessageRole.ASSISTANT)
+      }
+      .sortedBy { it.createdAt }
   }
 
   private fun executeGeminiRequest(
@@ -418,6 +468,13 @@ class OpenAiCompatClient(
       userMessage = userMessage
     )
 
+    return parseGeminiText(executeGeminiRequest(config, requestBody))
+  }
+
+  private fun executeGeminiRequest(
+    config: LlmConfig,
+    requestBody: JsonObject
+  ): JsonObject {
     val url = geminiUrl(config.baseUrl, config.model)
 
     logRequestShape(
@@ -426,13 +483,15 @@ class OpenAiCompatClient(
       requestBody.keys.sorted()
     )
 
+    val requestString = json.encodeToString(requestBody)
+    HookLog.i("executeGeminiRequest requestString:  $requestString")
+
     val requestBuilder = Request.Builder()
       .url(url)
       .header("Content-Type", "application/json")
       .header("X-goog-api-key", config.apiKey)
       .post(
-        json.encodeToString(requestBody)
-          .toRequestBody("application/json".toMediaType())
+        requestString.toRequestBody("application/json".toMediaType())
       )
 
     val response = client.newCall(requestBuilder.build()).execute()
@@ -444,10 +503,9 @@ class OpenAiCompatClient(
     }
 
     val body = response.body?.string().orEmpty()
+    HookLog.i("executeGeminiRequest response:  $body")
 
-    return parseGeminiText(
-      json.parseToJsonElement(body).jsonObject
-    )
+    return json.parseToJsonElement(body).jsonObject
   }
 
   private fun parseGeminiText(response: JsonObject): String {
@@ -642,8 +700,16 @@ class OpenAiCompatClient(
   }
 
   private fun memoryToolSystemPrompt(existingMemories: List<MemoryRecord>): String {
-    val existing = existingMemories.take(30).joinToString("\n") { "- id=${it.id}: ${it.content}" }.ifBlank { "无" }
-    return memoryToolDescription() + "\n\nExisting memories:\n$existing"
+    return memoryToolDescription() + "\n\nExisting memories:\n${formatExistingMemories(existingMemories)}"
+  }
+
+  private fun formatExistingMemories(
+    existingMemories: List<MemoryRecord>
+  ): String {
+    return existingMemories
+      .take(30)
+      .joinToString("\n") { "- id=${it.id}: ${it.content}" }
+      .ifBlank { "无" }
   }
 
   private fun memoryToolDescription(): String {
@@ -664,12 +730,11 @@ class OpenAiCompatClient(
   }
 
   private fun memoryExtractionUserPrompt(question: String, answer: String, existingMemories: List<MemoryRecord>): String {
-    val existing = existingMemories.take(30).joinToString("\n") { "- id=${it.id}: ${it.content}" }.ifBlank { "无" }
     return """
       Analyze this finished assistant interaction and maintain long-term memories.
 
       Existing memories:
-      $existing
+    ${formatExistingMemories(existingMemories)}
 
       User question:
       $question
